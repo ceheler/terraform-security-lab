@@ -78,6 +78,12 @@ The complete environment can be removed with:
 
 The lab was tested through a full lifecycle of deployment, destruction, and recreation to verify that the infrastructure can be reproduced entirely from Terraform.
 
+## Validation
+
+The lab was validated through repeated `terraform plan`, `terraform apply`, `terraform destroy`, and recreation cycles to confirm that the environment could be reproduced entirely from code.
+
+The environment was also used to generate known AWS API activity for the `cloudtrail-security-monitor` project. Terraform operations performed through the known `TerraformExecutionRole` created ground-truth CloudTrail telemetry that was later used to validate security detections for actions such as VPC deletion and EC2 instance termination.
+
 ## Terraform Reference
 
 <!-- BEGIN_TF_DOCS -->
@@ -116,3 +122,10 @@ The lab was tested through a full lifecycle of deployment, destruction, and recr
 | <a name="output_public_subnet_id"></a> [public\_subnet\_id](#output\_public\_subnet\_id) | The ID of the public subnet |
 | <a name="output_vpc_id"></a> [vpc\_id](#output\_vpc\_id) | The ID of the VPC |
 <!-- END_TF_DOCS -->
+
+## Current Scope / Future Improvements
+
+- The private subnet currently has no outbound Internet route or NAT gateway.
+- The lab deploys a single EC2 instance for controlled testing.
+- Remote administration currently depends on Systems Manager connectivity.
+- Future improvements may include VPC endpoints for Systems Manager, additional private-subnet workloads, reusable Terraform modules, and automated policy validation.
