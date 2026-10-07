@@ -68,6 +68,9 @@ resource "aws_security_group" "lab_security_group" {
   vpc_id      = aws_vpc.security_lab.id
 }
 
+# Accepted risk: lab instance requires unrestricted outbound Internet access.
+# Revisit if VPC endpoints or restricted egress architecture is implemented.
+#trivy:ignore:AVD-AWS-0104:exp:2027-01-07
 resource "aws_vpc_security_group_egress_rule" "allow_all_traffic_ipv4" {
   security_group_id = aws_security_group.lab_security_group.id
   ip_protocol       = "-1"
