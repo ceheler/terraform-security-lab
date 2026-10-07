@@ -148,6 +148,7 @@ resource "aws_instance" "lab_server_1" {
 resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
   name              = "/security-lab/vpc-flow-logs"
   retention_in_days = 7
+  kms_key_id        = aws_kms_key.vpc_flow_logs.arn
 
   tags = {
     Name = "SecurityLab-VPC-Flow-Logs"
@@ -217,6 +218,51 @@ resource "aws_flow_log" "security_lab" {
   depends_on = [
     aws_iam_role_policy.vpc_flow_logs_policy
   ]
+
+  tags = {
+    Name = "SecurityLab-VPC-Flow-Logs"
+  }
+}
+
+resource "aws_kms_key" "vpc_flow_logs" {
+  description         = "KMS key for SecurityLab VPC Flow Logs"
+  enable_key_rotation = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableIAMUserPermissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${var.region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*"
+        ]
+        Resource = "*"
+
+        Condition = {
+          ArnEquals = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/security-lab/vpc-flow-logs"
+          }
+        }
+      }
+    ]
+  })
 
   tags = {
     Name = "SecurityLab-VPC-Flow-Logs"
