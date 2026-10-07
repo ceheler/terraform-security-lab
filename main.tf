@@ -17,6 +17,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_vpc" "security_lab" {
   cidr_block = var.vpc_cidr
 
@@ -70,6 +72,7 @@ resource "aws_vpc_security_group_egress_rule" "allow_all_traffic_ipv4" {
   security_group_id = aws_security_group.lab_security_group.id
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
+  description       = "Allow all outbound traffic"
 }
 
 resource "aws_subnet" "private_subnet" {
@@ -129,7 +132,93 @@ resource "aws_instance" "lab_server_1" {
   vpc_security_group_ids      = [aws_security_group.lab_security_group.id]
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
 
+  metadata_options {
+    http_tokens = "required"
+  }
+
+  root_block_device {
+    encrypted = true
+  }
+
   tags = {
     Name = "SecurityLab-Server-1"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/security-lab/vpc-flow-logs"
+  retention_in_days = 7
+
+  tags = {
+    Name = "SecurityLab-VPC-Flow-Logs"
+  }
+}
+
+resource "aws_iam_role" "vpc_flow_logs_role" {
+  name = "security-lab-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:vpc-flow-log/*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "vpc_flow_logs_policy" {
+  name = "security-lab-vpc-flow-logs-policy"
+  role = aws_iam_role.vpc_flow_logs_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.vpc_flow_logs.arn}:log-stream:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_flow_log" "security_lab" {
+  iam_role_arn    = aws_iam_role.vpc_flow_logs_role.arn
+  log_destination = aws_cloudwatch_log_group.vpc_flow_logs.arn
+  traffic_type    = "ALL"
+  vpc_id          = aws_vpc.security_lab.id
+
+  depends_on = [
+    aws_iam_role_policy.vpc_flow_logs_policy
+  ]
+
+  tags = {
+    Name = "SecurityLab-VPC-Flow-Logs"
   }
 }
