@@ -1,6 +1,6 @@
 # Terraform Security Lab
 
-This project uses Terraform to deploy a small AWS security lab consisting of a VPC, public and private subnets, route tables, an Internet Gateway, a security group, an IAM instance profile, and a single EC2 instance.
+This project uses Terraform to deploy a small AWS security lab consisting of a VPC, public and private subnets, route tables, an Internet Gateway, a security group, an IAM instance profile, a single EC2 instance, VPC Flow Logs, a CloudWatch Logs destination, and customer-managed KMS encryption for network telemetry.
 
 The EC2 instance is managed through AWS Systems Manager Session Manager rather than direct SSH. This avoids storing SSH private keys in Terraform state and eliminates the need to expose an inbound management port.
 
@@ -19,18 +19,50 @@ A single EC2 instance is deployed into the public subnet. The instance type is c
 
 The EC2 instance receives a public IPv4 address and uses the public subnet’s route to the Internet Gateway for outbound Internet connectivity. The security group contains no inbound management rules. Administrative access is provided through AWS Systems Manager Session Manager.
 
+VPC Flow Logs are enabled for all accepted and rejected network traffic in the VPC. Flow-log records are delivered to a dedicated CloudWatch Logs log group with a seven-day retention period.
+
+The CloudWatch log group is encrypted using a customer-managed AWS KMS key with automatic key rotation enabled. The KMS key policy restricts CloudWatch Logs use of the key to the specific VPC Flow Logs log group.
+
+A dedicated IAM service role is used for VPC Flow Logs delivery. Its trust relationship is restricted using `aws:SourceAccount` and `aws:SourceArn` conditions, and its permissions are limited to the CloudWatch Logs operations required for log delivery.
+
 ## Security Design
 
 This lab was designed to avoid several common security issues in small AWS environments:
 
 - Terraform assumes a dedicated execution role instead of using static AWS credentials.
-- The Terraform execution role is granted only the permissions required to manage the lab resources.
-- `iam:PassRole` is restricted to the EC2 role required by this environment.
+- Terraform uses a dedicated execution role intended to be scoped to the permissions required to manage the lab resources.
+- `iam:PassRole` permissions are intended to be restricted to the specific service roles required by this environment.
 - EC2 administrative access uses AWS Systems Manager Session Manager instead of direct SSH.
 - No SSH private keys are generated or stored in Terraform state.
 - The EC2 security group does not expose an inbound SSH management port.
 - Terraform state files and environment-specific `.tfvars` files are excluded from source control.
 - The AWS account-specific execution-role ARN is supplied locally through `terraform.tfvars` rather than being committed to the repository.
+- EC2 requires IMDSv2 session tokens for access to the Instance Metadata Service.
+- The EC2 root EBS volume is explicitly encrypted at rest.
+- VPC Flow Logs capture both accepted and rejected network traffic for security visibility and troubleshooting.
+- VPC Flow Logs are stored in CloudWatch Logs with a seven-day retention period.
+- The VPC Flow Logs log group is encrypted with a customer-managed KMS key with automatic rotation enabled.
+- The VPC Flow Logs IAM role is separated from the EC2 instance role and uses restricted service-role trust conditions.
+- CloudWatch log-delivery permissions are scoped to the intended log group rather than granting broad CloudWatch Logs access.
+
+## CI/CD Security
+
+Terraform changes are validated through a GitHub Actions CI workflow before they can be merged.
+
+The pipeline performs the following checks:
+
+- `terraform fmt -check -recursive` verifies consistent Terraform formatting.
+- `terraform init -backend=false` initializes the required Terraform providers without accessing or modifying Terraform backend state.
+- `terraform validate` verifies Terraform syntax, references, types, and configuration structure.
+- Trivy performs Infrastructure-as-Code security scanning and causes the CI job to fail when an unsuppressed misconfiguration is detected.
+
+The pipeline does not run `terraform plan`, `terraform apply`, or use AWS deployment credentials. Infrastructure deployment remains an explicit local operation rather than an automated CI action.
+
+GitHub Actions dependencies are pinned to full-length immutable commit SHAs rather than mutable version tags. Repository policy requires full-length SHA references and prevents workflows using movable Action references from running.
+
+Dependabot checks GitHub Actions dependencies weekly and opens pull requests when updated Action releases are available, allowing pinned SHAs to remain current while preserving immutable workflow dependencies.
+
+Trivy findings are treated as blocking by default. The lab currently contains one explicitly accepted exception for unrestricted outbound Internet access from the EC2 security group. The exception is scoped to the affected Terraform resource, documented in source, and configured with an expiration date so that the risk must be reevaluated.
 
 ## Prerequisites
 
@@ -84,6 +116,12 @@ The lab was validated through repeated `terraform plan`, `terraform apply`, `ter
 
 The environment was also used to generate known AWS API activity for the `cloudtrail-security-monitor` project. Terraform operations performed through the known `TerraformExecutionRole` created ground-truth CloudTrail telemetry that was later used to validate security detections for actions such as VPC deletion and EC2 instance termination.
 
+The Terraform CI pipeline was also validated through both successful and intentionally failing pull requests.
+
+IaC scanning initially identified security findings involving IMDSv2, EBS encryption, VPC Flow Logs, CloudWatch Logs encryption, security-group documentation, and unrestricted egress. The applicable findings were remediated in Terraform, while unrestricted outbound access was retained as a documented, scoped, and expiring risk exception for the current lab design.
+
+GitHub Actions SHA enforcement was tested by intentionally replacing an immutable Action reference with a mutable version tag. GitHub rejected the workflow as expected, confirming that the repository-level supply-chain control is actively enforced rather than only documented.
+
 ## Terraform Reference
 
 <!-- BEGIN_TF_DOCS -->
@@ -128,4 +166,5 @@ The environment was also used to generate known AWS API activity for the `cloudt
 - The private subnet currently has no outbound Internet route or NAT gateway.
 - The lab deploys a single EC2 instance for controlled testing.
 - Remote administration currently depends on Systems Manager connectivity.
-- Future improvements may include VPC endpoints for Systems Manager, additional private-subnet workloads, reusable Terraform modules, and automated policy validation.
+- The EC2 security group currently permits unrestricted outbound IPv4 traffic. This is an explicitly documented and time-limited accepted risk for the lab.
+- Future improvements may include VPC endpoints for Systems Manager, restricting outbound Internet access, moving workloads into the private subnet, additional private-subnet workloads, and reusable Terraform modules.
